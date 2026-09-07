@@ -75,8 +75,14 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
 
-    # Initialize model on target device
-    device = torch.device(args.device)
+    # Initialize model on target device (with fallback to cpu if cuda unavailable)
+    device_str = args.device
+    if device_str == "cuda" and not torch.cuda.is_available():
+        print("[WARNING] '--device cuda' was requested, but CUDA is not available in this environment.")
+        print("[WARNING] Falling back to CPU execution.")
+        device_str = "cpu"
+
+    device = torch.device(device_str)
     model = HydraLM(config).to(device)
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Initialized HydraLM model with {num_params:,} parameters on {device}")
