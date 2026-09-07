@@ -53,7 +53,9 @@ class GatedDeltaNet(nn.Module):
         qkv = self.in_proj(x).transpose(1, 2)              # (B, 3D, T)
         qkv = self.conv1d(qkv)[..., :T].transpose(1, 2)    # causal crop -> (B, T, 3D)
         q, k, v = qkv.chunk(3, dim=-1)                     # each (B, T, D)
-        q, k, v = F.silu(q), F.silu(k), F.silu(v)
+        q = F.normalize(F.silu(q), p=2, dim=-1, eps=1e-6)
+        k = F.normalize(F.silu(k), p=2, dim=-1, eps=1e-6)
+        v = F.silu(v)
 
         # Gating parameters
         beta  = torch.sigmoid(self.beta_proj(x)).squeeze(-1)   # (B, T) write gate in (0,1)
