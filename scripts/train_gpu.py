@@ -98,8 +98,12 @@ def main():
     print(enc.decode(init_ids[0].tolist()))
     print("-" * 50)
 
-    # Trainer setup
+    # Trainer setup with Cosine Annealing learning rate decay
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.max_iters, eta_min=args.lr * 0.1
+    )
+
     trainer_config = {
         "max_iters": args.max_iters,
         "eval_interval": args.eval_interval,
@@ -114,6 +118,7 @@ def main():
         train_dataloader=train_loader,
         val_dataloader=val_loader,
         optimizer=optimizer,
+        scheduler=scheduler,
         device=str(device),
         config=trainer_config,
     )

@@ -42,3 +42,10 @@ class TestHydraLM:
             out = model.generate(prompt, max_new_tokens=5)
             assert out.shape[0] == B
             assert not torch.isnan(out.float()).any()
+
+    def test_generate_repetition_penalty(self, model, cfg, B):
+        """repetition_penalty > 1.0 and top_k must generate valid non-NaN token tensor."""
+        prompt = torch.randint(0, cfg.vocab_size, (B, 5))
+        out = model.generate(prompt, max_new_tokens=10, repetition_penalty=1.5, top_k=20)
+        assert out.shape == (B, 15)
+        assert not torch.isnan(out.float()).any()

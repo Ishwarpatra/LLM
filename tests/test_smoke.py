@@ -1,8 +1,8 @@
-﻿import torch
+import torch
 import pytest
 from hydra_lm.config import HydraConfig
 from hydra_lm.model.hydra_lm import HydraLM
-from hydra_lm.training.trainer import Trainer
+from training.trainer import Trainer
 
 def test_full_pipeline():
     config = HydraConfig(

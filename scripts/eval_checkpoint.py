@@ -36,7 +36,10 @@ def main():
     
     ckpt_path = Path(args.ckpt)
     if ckpt_path.exists():
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        try:
+            checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        except TypeError:
+            checkpoint = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(checkpoint["model"])
         print(f"Loaded checkpoint from {ckpt_path} (step {checkpoint.get('step', 'unknown')})")
     else:
