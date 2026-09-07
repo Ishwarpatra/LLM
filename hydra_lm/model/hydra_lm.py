@@ -83,8 +83,9 @@ class HydraLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int = 20,
-        temperature: float = 1.0,
-        top_k: Optional[int] = None,
+        temperature: float = 0.8,
+        top_k: Optional[int] = 40,
+        repetition_penalty: float = 1.15,
     ) -> torch.Tensor:
         """Autoregressive generation with prefill + decode (FR-7, FR-8).
 
@@ -92,10 +93,11 @@ class HydraLM(nn.Module):
         Step 2 (decode):  generate one token at a time using cached state.
 
         Args:
-            input_ids:      (B, T_prompt)
-            max_new_tokens: tokens to produce
-            temperature:    softmax temperature (1.0 = unchanged)
-            top_k:          if set, restrict to top-k logits before sampling
+            input_ids:          (B, T_prompt)
+            max_new_tokens:     tokens to produce
+            temperature:        softmax temperature (0.8 = default)
+            top_k:              restrict to top-k logits (default 40)
+            repetition_penalty: penalty for repeating tokens (1.0 = none, >1.0 = penalize)
         Returns:
             (B, T_prompt + max_new_tokens)
         """
@@ -108,7 +110,7 @@ class HydraLM(nn.Module):
         mask    = _causal_mask(prompt_len, device)
         logits, caches = self.forward(input_ids, pos_ids, mask, caches)
 
-        next_tok = self._sample(logits[:, -1], temperature, top_k)
+        next_tok = self._sample(logits[:, -1], input_ids, temperature, top_k, repetition_penalty)
         input_ids = torch.cat([input_ids, next_tok], dim=1)
 
         # Decode
@@ -116,17 +118,30 @@ class HydraLM(nn.Module):
             cur_len = input_ids.shape[1]
             pos_ids = torch.full((B, 1), cur_len - 1, device=device, dtype=torch.long)
             logits, caches = self.forward(input_ids[:, -1:], pos_ids, None, caches)
-            next_tok = self._sample(logits[:, -1], temperature, top_k)
+            next_tok = self._sample(logits[:, -1], input_ids, temperature, top_k, repetition_penalty)
             input_ids = torch.cat([input_ids, next_tok], dim=1)
 
         return input_ids
 
     @staticmethod
-    def _sample(logits, temperature, top_k):
-        """(B, vocab) -> (B, 1) sampled token ids."""
-        if temperature != 1.0:
+    def _sample(logits, history_ids, temperature=0.8, top_k=40, repetition_penalty=1.15):
+        """(B, vocab) -> (B, 1) sampled token ids with repetition penalty and top-k."""
+        if repetition_penalty != 1.0 and history_ids is not None:
+            B = logits.shape[0]
+            for b in range(B):
+                seen_tokens = set(history_ids[b].tolist())
+                for tok_id in seen_tokens:
+                    if logits[b, tok_id] < 0:
+                        logits[b, tok_id] *= repetition_penalty
+                    else:
+                        logits[b, tok_id] /= repetition_penalty
+
+        if temperature > 0 and temperature != 1.0:
             logits = logits / temperature
-        if top_k is not None:
+
+        if top_k is not None and top_k > 0:
             vals, _ = torch.topk(logits, min(top_k, logits.size(-1)), dim=-1)
             logits = logits.masked_fill(logits < vals[:, -1:], float("-inf"))
-        return torch.multinomial(F.softmax(logits, dim=-1), num_samples=1)
+
+        probs = F.softmax(logits, dim=-1)
+        return torch.multinomial(probs, num_samples=1)
