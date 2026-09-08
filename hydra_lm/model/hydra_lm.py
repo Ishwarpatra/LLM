@@ -125,16 +125,20 @@ class HydraLM(nn.Module):
 
     @staticmethod
     def _sample(logits, history_ids, temperature=0.8, top_k=40, repetition_penalty=1.15):
-        """(B, vocab) -> (B, 1) sampled token ids with repetition penalty and top-k."""
+        """(B, vocab) -> (B, 1) sampled token ids with frequency-aware repetition penalty and top-k."""
         if repetition_penalty != 1.0 and history_ids is not None:
             B = logits.shape[0]
             for b in range(B):
-                seen_tokens = set(history_ids[b].tolist())
-                for tok_id in seen_tokens:
+                # Count occurrences of each token (frequency-aware: more repeats = stronger penalty)
+                token_counts: dict = {}
+                for tok_id in history_ids[b].tolist():
+                    token_counts[tok_id] = token_counts.get(tok_id, 0) + 1
+                for tok_id, count in token_counts.items():
+                    effective_penalty = repetition_penalty ** count
                     if logits[b, tok_id] < 0:
-                        logits[b, tok_id] *= repetition_penalty
+                        logits[b, tok_id] *= effective_penalty
                     else:
-                        logits[b, tok_id] /= repetition_penalty
+                        logits[b, tok_id] /= effective_penalty
 
         if temperature > 0 and temperature != 1.0:
             logits = logits / temperature
@@ -145,3 +149,4 @@ class HydraLM(nn.Module):
 
         probs = F.softmax(logits, dim=-1)
         return torch.multinomial(probs, num_samples=1)
+

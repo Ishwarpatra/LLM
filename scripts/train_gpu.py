@@ -93,7 +93,7 @@ def main():
     # Initial sample generation
     model.eval()
     with torch.no_grad():
-        init_ids = model.generate(prompt_ids, max_new_tokens=40, temperature=0.8)
+        init_ids = model.generate(prompt_ids, max_new_tokens=40, temperature=1.0, top_k=50, repetition_penalty=1.5)
     print("\n--- Initial Generation Before Training ---")
     print(enc.decode(init_ids[0].tolist()))
     print("-" * 50)
@@ -129,7 +129,7 @@ def main():
     # Final sample generation
     model.eval()
     with torch.no_grad():
-        final_ids = model.generate(prompt_ids, max_new_tokens=50, temperature=0.8)
+        final_ids = model.generate(prompt_ids, max_new_tokens=200, temperature=1.0, top_k=50, repetition_penalty=1.5)
     
     print("\n" + "=" * 70)
     print("FINAL Generation After GPU Training:")
