@@ -18,7 +18,7 @@ import argparse
 from pathlib import Path
 
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -34,14 +34,19 @@ from training.trainer import Trainer
 
 def parse_args():
     p = argparse.ArgumentParser(description="HYDRA-LM GPU/Scale Training Script")
-    p.add_argument("--preset", default="small", choices=["toy", "small", "reference"])
+    p.add_argument("--preset", default="small", choices=["toy", "small", "medium", "reference"])
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--max_iters", type=int, default=1000)
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--seq_len", type=int, default=128)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--eval_interval", type=int, default=100)
-    p.add_argument("--data_path", default="data/tinyshakespeare.h5")
+    p.add_argument("--data_path", default="data/wikitext103.h5" if Path("data/wikitext103.h5").exists() else "data/tinyshakespeare.h5",
+                   help="Path to pretraining HDF5 dataset")
+    p.add_argument("--tokenizer", default="tokenizers/hydra_bpe" if Path("tokenizers/hydra_bpe").exists() else "gpt2",
+                   help="Path to HF tokenizer dir/file or tiktoken encoding name")
+    p.add_argument("--prompt", default="The history of science",
+                   help="Prompt string for generation samples")
     p.add_argument("--out_dir", default="checkpoints_small")
     # Agent flags
     p.add_argument(
@@ -62,17 +67,29 @@ def parse_args():
 def _build_model_and_data(args):
     h5_path = Path(args.data_path)
     if not h5_path.exists():
-        print(f"Error: {h5_path} not found. Run scripts/prepare_data.py first.")
-        sys.exit(1)
+        if Path("data/tinyshakespeare.h5").exists():
+            print(f"Note: {h5_path} not found, falling back to data/tinyshakespeare.h5")
+            h5_path = Path("data/tinyshakespeare.h5")
+        else:
+            print(f"Error: {h5_path} not found. Run scripts/prepare_data.py first.")
+            sys.exit(1)
 
-    enc = tiktoken.get_encoding("gpt2")
-    vocab_size = enc.n_vocab
-    print(f"Loaded tokenizer 'gpt2' (vocab_size={vocab_size:,})")
+    from scripts.prepare_data import load_tokenizer
+    try:
+        enc = load_tokenizer(args.tokenizer)
+    except Exception as e:
+        print(f"Warning: Failed to load '{args.tokenizer}' ({e}), falling back to gpt2")
+        enc = load_tokenizer("gpt2")
+
+    vocab_size = enc.vocab_size
+    print(f"Loaded tokenizer '{args.tokenizer}' (vocab_size={vocab_size:,})")
 
     if args.preset == "toy":
         config = HydraConfig.toy(vocab_size=vocab_size)
     elif args.preset == "small":
         config = HydraConfig.small(vocab_size=vocab_size)
+    elif args.preset == "medium":
+        config = HydraConfig.medium(vocab_size=vocab_size)
     else:
         config = HydraConfig.reference()
         config.vocab_size = vocab_size
@@ -103,9 +120,9 @@ def _build_model_and_data(args):
     return config, enc, model, train_loader, val_loader, device
 
 
-def _initial_sample(model, enc, device):
-    prompt_text = "First Citizen:\nBefore we proceed"
-    prompt_ids = torch.tensor([enc.encode(prompt_text)], dtype=torch.long, device=device)
+def _initial_sample(model, enc, device, prompt_text: str = "The history of science"):
+    encoded = enc.encode(prompt_text)
+    prompt_ids = torch.tensor([encoded], dtype=torch.long, device=device)
     model.eval()
     with torch.no_grad():
         ids = model.generate(
@@ -217,7 +234,7 @@ def run_agent(args, config, enc, model, train_loader, val_loader, device):
             print(f"[agent eval plan @ step {step}] {plan.reason}")
             if plan.run_generation_sample:
                 sample = agent.generate_sample(
-                    "First Citizen:\nBefore we proceed", max_tokens=80
+                    args.prompt, max_tokens=80
                 )
                 print(f"\n--- Sample @ step {step} ---\n{sample}\n{'-'*40}")
 
@@ -233,7 +250,7 @@ def main():
     print("=" * 70)
 
     config, enc, model, train_loader, val_loader, device = _build_model_and_data(args)
-    prompt_ids = _initial_sample(model, enc, device)
+    prompt_ids = _initial_sample(model, enc, device, prompt_text=args.prompt)
 
     if args.no_agent:
         run_deterministic(args, config, enc, model, train_loader, val_loader, device)

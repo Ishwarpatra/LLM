@@ -51,13 +51,13 @@ class HydraConfig:
 
 
     @classmethod
-    def toy(cls, vocab_size: int = 50257) -> "HydraConfig":
+    def toy(cls, vocab_size: int = 12000) -> "HydraConfig":
         """Tiny config for unit tests and local CPU runs."""
         return cls(vocab_size=vocab_size)
 
     @classmethod
-    def small(cls, vocab_size: int = 50257) -> "HydraConfig":
-        """Small config (~20M params) for cloud GPU training runs."""
+    def small(cls, vocab_size: int = 12000) -> "HydraConfig":
+        """Small config (~15M params) for cloud GPU training runs."""
         n = 6
         unit = ["linear", "linear", "full"]
         pattern = (unit * (n // len(unit)) + unit[: n % len(unit)])[:n]
@@ -66,6 +66,23 @@ class HydraConfig:
             num_query_heads=8,
             num_kv_heads=2,
             intermediate_size=768,
+            num_layers=n,
+            layer_pattern=pattern,
+            vocab_size=vocab_size,
+            rms_eps=1e-6,
+        )
+
+    @classmethod
+    def medium(cls, vocab_size: int = 12000) -> "HydraConfig":
+        """Medium config (~25-30M params) for full pretraining run."""
+        n = 12
+        unit = ["linear", "linear", "full"]
+        pattern = (unit * (n // len(unit)) + unit[: n % len(unit)])[:n]
+        return cls(
+            hidden_size=384,
+            num_query_heads=12,
+            num_kv_heads=3,
+            intermediate_size=1152,
             num_layers=n,
             layer_pattern=pattern,
             vocab_size=vocab_size,

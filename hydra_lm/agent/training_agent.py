@@ -214,7 +214,9 @@ class HydraLMTrainingAgent:
             raise RuntimeError("Attach a tokenizer: agent.tokenizer = enc")
 
         tok = self.tokenizer
-        ids = torch.tensor([tok.encode(prompt)], dtype=torch.long, device=self.device)
+        raw_enc = tok.encode(prompt)
+        prompt_ids = raw_enc.ids if hasattr(raw_enc, "ids") else list(raw_enc)
+        ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
         self.model.eval()
         with torch.no_grad():
             out = self.model.generate(
