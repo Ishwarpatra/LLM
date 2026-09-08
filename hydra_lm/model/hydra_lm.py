@@ -85,7 +85,9 @@ class HydraLM(nn.Module):
         max_new_tokens: int = 20,
         temperature: float = 0.8,
         top_k: Optional[int] = 40,
+        top_p: Optional[float] = None,
         repetition_penalty: float = 1.15,
+        recent_window: int = 20,
     ) -> torch.Tensor:
         """Autoregressive generation with prefill + decode (FR-7, FR-8).
 
@@ -95,9 +97,11 @@ class HydraLM(nn.Module):
         Args:
             input_ids:          (B, T_prompt)
             max_new_tokens:     tokens to produce
-            temperature:        softmax temperature (0.8 = default)
-            top_k:              restrict to top-k logits (default 40)
-            repetition_penalty: penalty for repeating tokens (1.0 = none, >1.0 = penalize)
+            temperature:        softmax temperature
+            top_k:              restrict to top-k logits (None = disabled)
+            top_p:              nucleus probability threshold (None = disabled)
+            repetition_penalty: base penalty factor (1.0 = none, >1.0 = penalize)
+            recent_window:      token window for stronger immediate-context penalty
         Returns:
             (B, T_prompt + max_new_tokens)
         """
@@ -110,7 +114,7 @@ class HydraLM(nn.Module):
         mask    = _causal_mask(prompt_len, device)
         logits, caches = self.forward(input_ids, pos_ids, mask, caches)
 
-        next_tok = self._sample(logits[:, -1], input_ids, temperature, top_k, repetition_penalty)
+        next_tok = self._sample(logits[:, -1], input_ids, temperature, top_k, top_p, repetition_penalty, recent_window)
         input_ids = torch.cat([input_ids, next_tok], dim=1)
 
         # Decode
@@ -118,36 +122,71 @@ class HydraLM(nn.Module):
             cur_len = input_ids.shape[1]
             pos_ids = torch.full((B, 1), cur_len - 1, device=device, dtype=torch.long)
             logits, caches = self.forward(input_ids[:, -1:], pos_ids, None, caches)
-            next_tok = self._sample(logits[:, -1], input_ids, temperature, top_k, repetition_penalty)
+            next_tok = self._sample(logits[:, -1], input_ids, temperature, top_k, top_p, repetition_penalty, recent_window)
             input_ids = torch.cat([input_ids, next_tok], dim=1)
 
         return input_ids
 
     @staticmethod
-    def _sample(logits, history_ids, temperature=0.8, top_k=40, repetition_penalty=1.15):
-        """(B, vocab) -> (B, 1) sampled token ids with frequency-aware repetition penalty and top-k."""
+    def _sample(
+        logits,
+        history_ids,
+        temperature=0.8,
+        top_k=40,
+        top_p: Optional[float] = None,
+        repetition_penalty: float = 1.15,
+        recent_window: int = 20,
+    ):
+        """(B, vocab) -> (B, 1) with two-tier repetition penalty + top-k/top-p.
+
+        Penalty tiers:
+          - Recent window (last `recent_window` tokens): penalty^count, uncapped.
+            Stops immediate bigram/trigram loops.
+          - Full history: penalty^min(count,3), capped to avoid crushing
+            common Shakespeare words that appear legitimately many times.
+        """
         logits = logits.clone()  # never mutate the caller's tensor
+
         if repetition_penalty != 1.0 and history_ids is not None:
             B = logits.shape[0]
             for b in range(B):
-                # Count occurrences of each token (frequency-aware: more repeats = stronger penalty)
-                token_counts: dict = {}
-                for tok_id in history_ids[b].tolist():
-                    token_counts[tok_id] = token_counts.get(tok_id, 0) + 1
-                for tok_id, count in token_counts.items():
-                    effective_penalty = repetition_penalty ** count
-                    if logits[b, tok_id] < 0:
-                        logits[b, tok_id] *= effective_penalty
-                    else:
-                        logits[b, tok_id] /= effective_penalty
+                full_hist = history_ids[b].tolist()
+                recent = full_hist[-recent_window:] if len(full_hist) > recent_window else full_hist
+
+                # Full-history pass (capped at exponent 3)
+                full_counts: dict = {}
+                for tok in full_hist:
+                    full_counts[tok] = full_counts.get(tok, 0) + 1
+                for tok, cnt in full_counts.items():
+                    p = repetition_penalty ** min(cnt, 3)
+                    logits[b, tok] = logits[b, tok] / p if logits[b, tok] > 0 else logits[b, tok] * p
+
+                # Recent-window pass (uncapped — kills bigram loops)
+                recent_counts: dict = {}
+                for tok in recent:
+                    recent_counts[tok] = recent_counts.get(tok, 0) + 1
+                for tok, cnt in recent_counts.items():
+                    p = repetition_penalty ** cnt
+                    logits[b, tok] = logits[b, tok] / p if logits[b, tok] > 0 else logits[b, tok] * p
 
         if temperature > 0 and temperature != 1.0:
             logits = logits / temperature
 
+        # top-k
         if top_k is not None and top_k > 0:
             vals, _ = torch.topk(logits, min(top_k, logits.size(-1)), dim=-1)
             logits = logits.masked_fill(logits < vals[:, -1:], float("-inf"))
 
+        # top-p nucleus (applied after top-k)
+        if top_p is not None and 0.0 < top_p < 1.0:
+            sorted_logits, sorted_idx = torch.sort(logits, descending=True, dim=-1)
+            cum_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+            # remove tokens beyond the nucleus
+            remove = cum_probs - F.softmax(sorted_logits, dim=-1) > top_p
+            sorted_logits[remove] = float("-inf")
+            logits = torch.zeros_like(logits).scatter_(-1, sorted_idx, sorted_logits)
+
         probs = F.softmax(logits, dim=-1)
         return torch.multinomial(probs, num_samples=1)
+
 

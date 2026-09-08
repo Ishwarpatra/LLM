@@ -18,10 +18,12 @@ def main():
     parser.add_argument("--ckpt", type=str, default="checkpoints_small/ckpt_200.pt")
     parser.add_argument("--prompt", type=str, default="First Citizen:\nBefore we proceed")
     parser.add_argument("--preset", type=str, default="small")
-    parser.add_argument("--max_tokens", type=int, default=100)
-    parser.add_argument("--temp", type=float, default=0.8)
-    parser.add_argument("--top_k", type=int, default=40)
-    parser.add_argument("--rep_penalty", type=float, default=1.15)
+    parser.add_argument("--max_tokens", type=int, default=200)
+    parser.add_argument("--temp", type=float, default=0.9)
+    parser.add_argument("--top_k", type=int, default=50)
+    parser.add_argument("--top_p", type=float, default=None)
+    parser.add_argument("--rep_penalty", type=float, default=1.3)
+    parser.add_argument("--window", type=int, default=20)
     args = parser.parse_args()
 
     enc = tiktoken.get_encoding("gpt2")
@@ -55,7 +57,9 @@ def main():
             max_new_tokens=args.max_tokens,
             temperature=args.temp,
             top_k=args.top_k,
+            top_p=args.top_p,
             repetition_penalty=args.rep_penalty,
+            recent_window=args.window,
         )
 
     text = enc.decode(out_ids[0].tolist())
