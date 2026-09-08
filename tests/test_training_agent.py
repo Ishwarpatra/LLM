@@ -131,3 +131,32 @@ class TestChooseNextEvalTarget:
         for step in [0, 100, 500, 1000, 2000, 2500]:
             plan = agent.choose_next_eval_target(step)
             assert plan.reason, f"Empty reason at step {step}"
+
+
+# ── train_step & gradient accumulation ─────────────────────────────────────
+
+class TestTrainStep:
+
+    def test_train_step_single(self, agent):
+        batch = (torch.randint(0, 100, (2, 16)), torch.randint(0, 100, (2, 16)))
+        initial_step = agent.step
+        loss = agent.train_step(batch)
+        assert isinstance(loss, float)
+        assert loss > 0
+        assert agent.step == initial_step + 1
+
+    def test_train_step_gradient_accumulation(self, agent):
+        batch1 = (torch.randint(0, 100, (2, 16)), torch.randint(0, 100, (2, 16)))
+        batch2 = (torch.randint(0, 100, (2, 16)), torch.randint(0, 100, (2, 16)))
+        initial_step = agent.step
+
+        # Micro-step 1 (accumulate)
+        loss1 = agent.train_step(batch1, grad_accum_steps=2, is_accum_step=True)
+        assert isinstance(loss1, float)
+        assert agent.step == initial_step  # step should not increment yet
+
+        # Micro-step 2 (step optimizer)
+        loss2 = agent.train_step(batch2, grad_accum_steps=2, is_accum_step=False)
+        assert isinstance(loss2, float)
+        assert agent.step == initial_step + 1  # step increments on final micro-step
+

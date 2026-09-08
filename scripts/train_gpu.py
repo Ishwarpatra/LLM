@@ -32,6 +32,9 @@ from training.dataset import PretrainDataset
 from training.trainer import Trainer
 
 
+import os
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 def parse_args():
     p = argparse.ArgumentParser(description="HYDRA-LM GPU/Scale Training Script")
     p.add_argument("--preset", default="small", choices=["toy", "small", "medium", "reference"])
@@ -39,6 +42,8 @@ def parse_args():
     p.add_argument("--max_iters", type=int, default=1000)
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--seq_len", type=int, default=128)
+    p.add_argument("--grad_accum", type=int, default=1,
+                   help="Number of gradient accumulation micro-steps (default: 1)")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--eval_interval", type=int, default=100)
     p.add_argument("--data_path", default="data/wikitext103.h5" if Path("data/wikitext103.h5").exists() else "data/tinyshakespeare.h5",
@@ -178,6 +183,7 @@ def run_deterministic(args, config, enc, model, train_loader, val_loader, device
         device=str(device),
         config={
             "max_iters": args.max_iters,
+            "grad_accum_steps": args.grad_accum,
             "eval_interval": args.eval_interval,
             "eval_iters": 20,
             "log_interval": max(1, args.eval_interval // 4),
@@ -212,18 +218,28 @@ def run_agent(args, config, enc, model, train_loader, val_loader, device):
 
     print(f"\n[agent] Starting agent-aware loop ({args.max_iters} steps) …\n")
     for step in range(args.max_iters):
-        try:
-            batch = next(data_iter)
-        except StopIteration:
-            data_iter = iter(train_loader)
-            batch = next(data_iter)
+        accum_loss = 0.0
+        for micro_step in range(args.grad_accum):
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(train_loader)
+                batch = next(data_iter)
 
-        loss = agent.train_step(batch)
-        agent.loss_history.append(loss)
+            is_accum = (micro_step < args.grad_accum - 1)
+            loss = agent.train_step(
+                batch,
+                grad_accum_steps=args.grad_accum,
+                is_accum_step=is_accum,
+            )
+            accum_loss += loss
+
+        step_loss = accum_loss / args.grad_accum
+        agent.loss_history.append(step_loss)
 
         if step % max(1, args.eval_interval // 4) == 0:
             lr = optimizer.param_groups[0]["lr"]
-            print(f"iter {step} | loss {loss:.4f} | lr {lr:.2e}")
+            print(f"iter {step} | loss {step_loss:.4f} | lr {lr:.2e}")
 
         if step > 0 and step % args.agent_interval == 0:
             window = agent.loss_history[-args.agent_interval:]

@@ -112,21 +112,26 @@ class HydraLMTrainingAgent:
             self.device = next(model.parameters()).device
 
         self._loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
+        self.optimizer.zero_grad(set_to_none=True)
 
     # ── deterministic actions (tools) ──────────────────────────────────────
 
-    def train_step(self, batch) -> float:
-        """Run one forward+backward+optimizer step; return the scalar loss.
+    def train_step(
+        self,
+        batch,
+        grad_accum_steps: int = 1,
+        is_accum_step: bool = False,
+    ) -> float:
+        """Run a single forward + backward step.
 
         Args:
-            batch: tuple of (input_ids, target_ids) or
-                   (input_ids, target_ids, loss_mask), each as LongTensor.
+            batch: (x, y) or (x, y, mask) tuple from a DataLoader.
+            grad_accum_steps: factor to scale loss by during accumulation.
+            is_accum_step: if True, skips optimizer/scheduler step and zero_grad.
         Returns:
-            float: training loss for this step.
+            float: unscaled training loss for this step.
         """
         self.model.train()
-        self.optimizer.zero_grad(set_to_none=True)
-
         if len(batch) == 2:
             x, y = batch
             mask = None
@@ -149,13 +154,17 @@ class HydraLMTrainingAgent:
         else:
             loss = self._loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
 
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        self.optimizer.step()
-        if self.scheduler is not None:
-            self.scheduler.step()
+        scaled_loss = loss / grad_accum_steps
+        scaled_loss.backward()
 
-        self.step += 1
+        if not is_accum_step:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
+            self.optimizer.zero_grad(set_to_none=True)
+            self.step += 1
+
         return loss.item()
 
     def save_checkpoint(self, tag: str) -> str:
