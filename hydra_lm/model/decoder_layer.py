@@ -41,7 +41,6 @@ class HybridDecoderLayer(nn.Module):
             x:     (B, T, hidden_size)
             cache: updated cache object
         """
-        # -- Attention sub-layer --------------------------------------------
         residual = x
         h = self.attn_norm(x)
 
@@ -57,7 +56,6 @@ class HybridDecoderLayer(nn.Module):
 
         x = residual + h
 
-        # -- MLP sub-layer --------------------------------------------------
         residual = x
         x = residual + self.mlp(self.mlp_norm(x))
 

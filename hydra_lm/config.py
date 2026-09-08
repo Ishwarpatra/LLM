@@ -45,6 +45,10 @@ class HydraConfig:
         assert self.num_query_heads % self.num_kv_heads == 0, (
             "num_query_heads must be divisible by num_kv_heads"
         )
+        valid = {"linear", "full"}
+        bad = [p for p in self.layer_pattern if p not in valid]
+        assert not bad, f"Invalid layer_pattern values {bad}; must be one of {valid}"
+
 
     @classmethod
     def toy(cls, vocab_size: int = 50257) -> "HydraConfig":

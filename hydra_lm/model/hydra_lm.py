@@ -126,6 +126,7 @@ class HydraLM(nn.Module):
     @staticmethod
     def _sample(logits, history_ids, temperature=0.8, top_k=40, repetition_penalty=1.15):
         """(B, vocab) -> (B, 1) sampled token ids with frequency-aware repetition penalty and top-k."""
+        logits = logits.clone()  # never mutate the caller's tensor
         if repetition_penalty != 1.0 and history_ids is not None:
             B = logits.shape[0]
             for b in range(B):

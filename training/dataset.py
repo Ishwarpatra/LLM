@@ -28,9 +28,7 @@ except ImportError:
     _HAS_H5 = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Pretrain dataset (HDF5 flat token array)
-# ─────────────────────────────────────────────────────────────────────────────
+# Pretrain dataset — flat HDF5 token array
 
 class PretrainDataset(Dataset):
     """Flat token-id array stored in HDF5; each sample is a seq_len window.
@@ -96,9 +94,7 @@ class PretrainDataset(Dataset):
         print(f"Saved {len(token_ids):,} tokens -> {out_path}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. SFT dataset (instruction-tuning with loss mask)
-# ─────────────────────────────────────────────────────────────────────────────
+# SFT dataset — instruction-tuning rows with per-token loss masks
 
 class SFTDataset(Dataset):
     """Packed SFT rows with per-token loss masks.
@@ -172,9 +168,7 @@ class SFTDataset(Dataset):
         return ids[:-1], ids[1:], mask[1:]   # input, target, loss_mask
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Raw text fallback (no HDF5 dependency)
-# ─────────────────────────────────────────────────────────────────────────────
+# TextDataset — raw-text fallback (no HDF5 dependency)
 
 class TextDataset(Dataset):
     """Minimal dataset from a raw text file. No external dependencies.

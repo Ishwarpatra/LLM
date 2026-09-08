@@ -62,7 +62,6 @@ class GatedDeltaNet(nn.Module):
         gamma = self.gamma_proj(x).squeeze(-1)                  # (B, T)
         alpha = torch.exp(-F.softplus(gamma))                   # (B, T) decay in (0,1)
 
-        # Zero-initialise state
         if state is None:
             state = torch.zeros(B, D, D, device=x.device, dtype=x.dtype)
 

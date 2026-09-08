@@ -53,33 +53,29 @@ class GatedGQA(nn.Module):
         """
         B, T, _ = x.shape
 
-        # Project
         q_and_gate = self.q_proj(x).view(B, T, self.n_q, self.hd * 2)
         q, gate = q_and_gate.chunk(2, dim=-1)       # each (B, T, n_q, hd)
         k = self.k_proj(x).view(B, T, self.n_kv, self.hd)
         v = self.v_proj(x).view(B, T, self.n_kv, self.hd)
 
-        # QK-Norm (before RoPE)
+        # QK-Norm applied before RoPE (SRS §3.3)
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        # RoPE
         cos, sin = self.rope(position_ids)           # (B, T, hd)
         cos = cos.unsqueeze(2)                       # (B, T, 1, hd) -> broadcast
         sin = sin.unsqueeze(2)
         q, k = apply_rotary(q, k, cos, sin)
 
-        # KV cache update
         if kv_cache is not None:
             k, v = kv_cache.update(k, v)            # -> (B, S, n_kv, hd)
 
         S = k.shape[1]
 
-        # Expand KV heads to match Q groups (MUST happen after cache update)
+        # KV heads expanded after cache update so cached K/V stay compact
         k = k.repeat_interleave(self.group, dim=2)  # (B, S, n_q, hd)
         v = v.repeat_interleave(self.group, dim=2)
 
-        # Scaled dot-product attention
         q = q.transpose(1, 2)   # (B, n_q, T, hd)
         k = k.transpose(1, 2)   # (B, n_q, S, hd)
         v = v.transpose(1, 2)   # (B, n_q, S, hd)
@@ -91,7 +87,7 @@ class GatedGQA(nn.Module):
 
         out = (attn_w.to(v.dtype) @ v).transpose(1, 2).reshape(B, T, self.n_q * self.hd)
 
-        # Sigmoid gating
+        # Sigmoid gate on output (SRS §3.3 — multiplicative gating)
         gate_flat = gate.reshape(B, T, self.n_q * self.hd)
         out = out * torch.sigmoid(gate_flat)
 
