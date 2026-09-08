@@ -67,12 +67,14 @@ def parse_args():
 def _build_model_and_data(args):
     h5_path = Path(args.data_path)
     if not h5_path.exists():
-        if Path("data/tinyshakespeare.h5").exists():
-            print(f"Note: {h5_path} not found, falling back to data/tinyshakespeare.h5")
-            h5_path = Path("data/tinyshakespeare.h5")
-        else:
-            print(f"Error: {h5_path} not found. Run scripts/prepare_data.py first.")
-            sys.exit(1)
+        print(f"\n[ERROR] Dataset file '{h5_path}' not found!")
+        print("To generate 'data/wikitext103.h5' on Colab/cloud, run:")
+        print("    !python scripts/download_wikitext103.py --out data/raw/wikitext103.txt")
+        print("    !python scripts/prepare_data.py --corpus data/raw/wikitext103.txt --tokenizer tokenizers/hydra_bpe --out data/wikitext103.h5\n")
+        print("Or for an instant 5-second smoke test using TinyShakespeare with hydra_bpe:")
+        print("    !python scripts/prepare_data.py --corpus data/tinyshakespeare.txt --tokenizer tokenizers/hydra_bpe --out data/tinyshakespeare_bpe.h5")
+        print("    !python scripts/train_gpu.py --data_path data/tinyshakespeare_bpe.h5 ...\n")
+        sys.exit(1)
 
     from scripts.prepare_data import load_tokenizer
     try:
@@ -83,6 +85,19 @@ def _build_model_and_data(args):
 
     vocab_size = enc.vocab_size
     print(f"Loaded tokenizer '{args.tokenizer}' (vocab_size={vocab_size:,})")
+
+    dataset = PretrainDataset(str(h5_path), seq_len=args.seq_len, stride=args.seq_len // 2)
+    print(f"Loaded PretrainDataset with {len(dataset):,} samples (seq_len={args.seq_len})")
+
+    # Sanity check: ensure token IDs in dataset do not exceed model vocab_size
+    sample_ids, _ = dataset[0]
+    max_id = sample_ids.max().item()
+    if max_id >= vocab_size:
+        print(f"\n[ERROR] Vocabulary mismatch!")
+        print(f"Dataset '{h5_path}' contains token ID {max_id}, but model vocab_size is only {vocab_size}!")
+        print("This occurs when training with a dataset created with a different tokenizer (e.g. gpt2 50k vs hydra_bpe 12k).")
+        print(f"Please regenerate the dataset using: python scripts/prepare_data.py --tokenizer {args.tokenizer} --out {h5_path}\n")
+        sys.exit(1)
 
     if args.preset == "toy":
         config = HydraConfig.toy(vocab_size=vocab_size)
@@ -96,9 +111,6 @@ def _build_model_and_data(args):
 
     print(f"Model config: hidden={config.hidden_size}, layers={config.num_layers}, "
           f"heads={config.num_query_heads}/{config.num_kv_heads}")
-
-    dataset = PretrainDataset(str(h5_path), seq_len=args.seq_len, stride=args.seq_len // 2)
-    print(f"Loaded PretrainDataset with {len(dataset):,} samples (seq_len={args.seq_len})")
 
     train_size = int(0.9 * len(dataset))
     val_size = len(dataset) - train_size
