@@ -1,8 +1,16 @@
-"""GPU / Multi-scale training script for HYDRA-LM.
+"""GPU training script for HYDRA-LM — agent-aware version.
 
-Supports scaling up HYDRA-LM (toy or small ~20M config) on CUDA / CPU devices,
-evaluating loss, saving checkpoints, and decoding sample generations.
+Two modes, selected by the --no-agent flag:
+
+  Default (agent mode):
+    Every `--agent_interval` steps the agent diagnoses the loss curve and
+    decides whether to continue, adjust LR, roll back, or stop.
+
+  --no-agent (deterministic mode):
+    Identical to the original loop — no agent calls, no LLM dependency.
+    Used for CI and unit tests that must not require an API key.
 """
+from __future__ import annotations
 
 import sys
 import io
@@ -17,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import torch
 import tiktoken
 from torch.utils.data import DataLoader
+
 from hydra_lm.config import HydraConfig
 from hydra_lm.model.hydra_lm import HydraLM
 from training.dataset import PretrainDataset
@@ -24,26 +33,33 @@ from training.trainer import Trainer
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="HYDRA-LM GPU/Scale Training Script")
-    parser.add_argument("--preset", type=str, default="small", choices=["toy", "small", "reference"], help="Model preset config")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
-    parser.add_argument("--max_iters", type=int, default=1000, help="Total training iterations")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size per micro-step")
-    parser.add_argument("--seq_len", type=int, default=128, help="Sequence window length")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--eval_interval", type=int, default=100, help="Evaluation interval")
-    parser.add_argument("--data_path", type=str, default="data/tinyshakespeare.h5", help="Path to HDF5 dataset")
-    parser.add_argument("--out_dir", type=str, default="checkpoints_small", help="Checkpoint output directory")
-    return parser.parse_args()
+    p = argparse.ArgumentParser(description="HYDRA-LM GPU/Scale Training Script")
+    p.add_argument("--preset", default="small", choices=["toy", "small", "reference"])
+    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--max_iters", type=int, default=1000)
+    p.add_argument("--batch_size", type=int, default=16)
+    p.add_argument("--seq_len", type=int, default=128)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--eval_interval", type=int, default=100)
+    p.add_argument("--data_path", default="data/tinyshakespeare.h5")
+    p.add_argument("--out_dir", default="checkpoints_small")
+    # Agent flags
+    p.add_argument(
+        "--no-agent",
+        dest="no_agent",
+        action="store_true",
+        help="Disable agentic decisions; run the deterministic loop (CI/test safe).",
+    )
+    p.add_argument(
+        "--agent_interval",
+        type=int,
+        default=500,
+        help="Steps between agent diagnose calls (agent mode only).",
+    )
+    return p.parse_args()
 
 
-def main():
-    args = parse_args()
-
-    print("=" * 70)
-    print(f"HYDRA-LM Cloud GPU Training ({args.preset.upper()} preset on {args.device.upper()})")
-    print("=" * 70)
-
+def _build_model_and_data(args):
     h5_path = Path(args.data_path)
     if not h5_path.exists():
         print(f"Error: {h5_path} not found. Run scripts/prepare_data.py first.")
@@ -53,7 +69,6 @@ def main():
     vocab_size = enc.n_vocab
     print(f"Loaded tokenizer 'gpt2' (vocab_size={vocab_size:,})")
 
-    # Select preset config
     if args.preset == "toy":
         config = HydraConfig.toy(vocab_size=vocab_size)
     elif args.preset == "small":
@@ -62,9 +77,9 @@ def main():
         config = HydraConfig.reference()
         config.vocab_size = vocab_size
 
-    print(f"Model config: hidden={config.hidden_size}, layers={config.num_layers}, heads={config.num_query_heads}/{config.num_kv_heads}")
+    print(f"Model config: hidden={config.hidden_size}, layers={config.num_layers}, "
+          f"heads={config.num_query_heads}/{config.num_kv_heads}")
 
-    # Load dataset
     dataset = PretrainDataset(str(h5_path), seq_len=args.seq_len, stride=args.seq_len // 2)
     print(f"Loaded PretrainDataset with {len(dataset):,} samples (seq_len={args.seq_len})")
 
@@ -75,11 +90,9 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
 
-    # Initialize model on target device (with fallback to cpu if cuda unavailable)
     device_str = args.device
     if device_str == "cuda" and not torch.cuda.is_available():
-        print("[WARNING] '--device cuda' was requested, but CUDA is not available in this environment.")
-        print("[WARNING] Falling back to CPU execution.")
+        print("[WARNING] CUDA not available — falling back to CPU.")
         device_str = "cpu"
 
     device = torch.device(device_str)
@@ -87,32 +100,46 @@ def main():
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Initialized HydraLM model with {num_params:,} parameters on {device}")
 
+    return config, enc, model, train_loader, val_loader, device
+
+
+def _initial_sample(model, enc, device):
     prompt_text = "First Citizen:\nBefore we proceed"
     prompt_ids = torch.tensor([enc.encode(prompt_text)], dtype=torch.long, device=device)
-
-    # Initial sample generation
     model.eval()
     with torch.no_grad():
-        init_ids = model.generate(prompt_ids, max_new_tokens=40, temperature=1.0, top_k=50, repetition_penalty=1.5)
+        ids = model.generate(
+            prompt_ids, max_new_tokens=40,
+            temperature=1.0, top_k=50, repetition_penalty=1.5,
+        )
     print("\n--- Initial Generation Before Training ---")
-    print(enc.decode(init_ids[0].tolist()))
+    print(enc.decode(ids[0].tolist()))
     print("-" * 50)
+    return prompt_ids
 
-    # Trainer setup with Cosine Annealing learning rate decay
+
+def _final_sample(model, enc, prompt_ids):
+    model.eval()
+    with torch.no_grad():
+        ids = model.generate(
+            prompt_ids, max_new_tokens=200,
+            temperature=0.9, top_p=0.92, repetition_penalty=1.4,
+            recent_window=20,
+        )
+    print("\n" + "=" * 70)
+    print("FINAL Generation After Training:")
+    print(enc.decode(ids[0].tolist()))
+    print("=" * 70)
+
+
+def run_deterministic(args, config, enc, model, train_loader, val_loader, device):
+    """Original deterministic training loop (unchanged behaviour)."""
+    from training.trainer import Trainer
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.max_iters, eta_min=args.lr * 0.1
     )
-
-    trainer_config = {
-        "max_iters": args.max_iters,
-        "eval_interval": args.eval_interval,
-        "eval_iters": 20,
-        "log_interval": max(1, args.eval_interval // 4),
-        "save_interval": args.eval_interval * 2,
-        "out_dir": args.out_dir,
-    }
-
     trainer = Trainer(
         model=model,
         train_dataloader=train_loader,
@@ -120,21 +147,100 @@ def main():
         optimizer=optimizer,
         scheduler=scheduler,
         device=str(device),
-        config=trainer_config,
+        config={
+            "max_iters": args.max_iters,
+            "eval_interval": args.eval_interval,
+            "eval_iters": 20,
+            "log_interval": max(1, args.eval_interval // 4),
+            "save_interval": args.eval_interval * 2,
+            "out_dir": args.out_dir,
+        },
     )
-
-    print(f"\nStarting GPU training loop ({args.max_iters} steps on {device}) ...\n")
+    print(f"\n[no-agent] Starting deterministic loop ({args.max_iters} steps) …\n")
     trainer.train()
 
-    # Final sample generation
-    model.eval()
-    with torch.no_grad():
-        final_ids = model.generate(prompt_ids, max_new_tokens=200, temperature=1.0, top_k=50, repetition_penalty=1.5)
-    
-    print("\n" + "=" * 70)
-    print("FINAL Generation After GPU Training:")
-    print(enc.decode(final_ids[0].tolist()))
+
+def run_agent(args, config, enc, model, train_loader, val_loader, device):
+    """Agent-aware loop: every agent_interval steps the agent decides."""
+    from hydra_lm.agent import HydraLMTrainingAgent
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.max_iters, eta_min=args.lr * 0.1
+    )
+
+    agent = HydraLMTrainingAgent(
+        config=config,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        out_dir=args.out_dir,
+        device=str(device),
+        tokenizer=enc,
+    )
+
+    data_iter = iter(train_loader)
+
+    print(f"\n[agent] Starting agent-aware loop ({args.max_iters} steps) …\n")
+    for step in range(args.max_iters):
+        try:
+            batch = next(data_iter)
+        except StopIteration:
+            data_iter = iter(train_loader)
+            batch = next(data_iter)
+
+        loss = agent.train_step(batch)
+        agent.loss_history.append(loss)
+
+        if step % max(1, args.eval_interval // 4) == 0:
+            lr = optimizer.param_groups[0]["lr"]
+            print(f"iter {step} | loss {loss:.4f} | lr {lr:.2e}")
+
+        if step > 0 and step % args.agent_interval == 0:
+            window = agent.loss_history[-args.agent_interval:]
+            verdict = agent.diagnose_training_health(window)
+            print(f"\n[agent verdict @ step {step}] {verdict.action}: {verdict.reason}")
+
+            if verdict.action == "STOP_EARLY":
+                print("[agent] Stopping early.")
+                break
+            elif verdict.action == "ADJUST_LR" and verdict.new_lr is not None:
+                agent.set_lr(verdict.new_lr)
+            elif verdict.action == "ROLLBACK" and verdict.checkpoint_tag:
+                print(f"[agent] Rolling back to '{verdict.checkpoint_tag}' …")
+                try:
+                    agent.load_checkpoint(verdict.checkpoint_tag)
+                except FileNotFoundError:
+                    print("[agent] Checkpoint not found — continuing.")
+
+            plan = agent.choose_next_eval_target(step)
+            print(f"[agent eval plan @ step {step}] {plan.reason}")
+            if plan.run_generation_sample:
+                sample = agent.generate_sample(
+                    "First Citizen:\nBefore we proceed", max_tokens=80
+                )
+                print(f"\n--- Sample @ step {step} ---\n{sample}\n{'-'*40}")
+
+            agent.save_checkpoint(tag=f"step_{step}")
+
+
+def main():
+    args = parse_args()
+
     print("=" * 70)
+    mode = "no-agent (deterministic)" if args.no_agent else "agent-aware"
+    print(f"HYDRA-LM Training ({args.preset.upper()} | {args.device.upper()} | {mode})")
+    print("=" * 70)
+
+    config, enc, model, train_loader, val_loader, device = _build_model_and_data(args)
+    prompt_ids = _initial_sample(model, enc, device)
+
+    if args.no_agent:
+        run_deterministic(args, config, enc, model, train_loader, val_loader, device)
+    else:
+        run_agent(args, config, enc, model, train_loader, val_loader, device)
+
+    _final_sample(model, enc, prompt_ids)
 
 
 if __name__ == "__main__":
