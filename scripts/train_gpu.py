@@ -55,6 +55,10 @@ def parse_args():
     p.add_argument("--prompt", default="The history of science",
                    help="Prompt string for generation samples")
     p.add_argument("--out_dir", default="checkpoints_small")
+    p.add_argument("--gradient_checkpointing", action="store_true", default=None,
+                   help="Enable activation gradient checkpointing (default: enabled for medium/reference)")
+    p.add_argument("--no_gradient_checkpointing", action="store_true",
+                   help="Explicitly disable activation gradient checkpointing")
     # Agent flags
     p.add_argument(
         "--no-agent",
@@ -121,8 +125,14 @@ def _build_model_and_data(args):
         config = HydraConfig.reference()
         config.vocab_size = vocab_size
 
+    if args.no_gradient_checkpointing:
+        config.gradient_checkpointing = False
+    elif args.gradient_checkpointing:
+        config.gradient_checkpointing = True
+
     print(f"Model config: hidden={config.hidden_size}, layers={config.num_layers}, "
-          f"heads={config.num_query_heads}/{config.num_kv_heads}")
+          f"heads={config.num_query_heads}/{config.num_kv_heads}, "
+          f"gradient_checkpointing={config.gradient_checkpointing}")
 
     train_size = int(0.9 * len(dataset))
     val_size = len(dataset) - train_size

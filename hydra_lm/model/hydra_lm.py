@@ -43,6 +43,7 @@ class HydraLM(nn.Module):
 
         # Weight tying: lm_head shares weights with the embedding table
         self.lm_head.weight = self.embed.weight
+        self.gradient_checkpointing = getattr(cfg, "gradient_checkpointing", False)
 
         self._init_weights()
 
@@ -72,8 +73,24 @@ class HydraLM(nn.Module):
         if caches is None:
             caches = [None] * len(self.layers)
 
-        for i, layer in enumerate(self.layers):
-            x, caches[i] = layer(x, position_ids, attn_mask, caches[i])
+        if self.training and self.gradient_checkpointing and caches[0] is None:
+            for i, layer in enumerate(self.layers):
+                def make_ckpt_fn(l):
+                    def _forward(hidden, pos, mask):
+                        out_hidden, _ = l(hidden, pos, mask, None)
+                        return out_hidden
+                    return _forward
+
+                x = torch.utils.checkpoint.checkpoint(
+                    make_ckpt_fn(layer),
+                    x,
+                    position_ids,
+                    attn_mask,
+                    use_reentrant=False,
+                )
+        else:
+            for i, layer in enumerate(self.layers):
+                x, caches[i] = layer(x, position_ids, attn_mask, caches[i])
 
         x = self.norm(x)
         return self.lm_head(x), caches

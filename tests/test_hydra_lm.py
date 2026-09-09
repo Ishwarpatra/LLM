@@ -49,3 +49,18 @@ class TestHydraLM:
         out = model.generate(prompt, max_new_tokens=10, repetition_penalty=1.5, top_k=20)
         assert out.shape == (B, 15)
         assert not torch.isnan(out.float()).any()
+
+    def test_gradient_checkpointing_backward(self, cfg, B, T):
+        """Model with gradient_checkpointing=True must run forward and backward cleanly."""
+        cfg.gradient_checkpointing = True
+        model = HydraLM(cfg)
+        model.train()
+        ids = torch.randint(0, cfg.vocab_size, (B, T))
+        logits, _ = model(ids)
+        loss = logits.sum()
+        loss.backward()
+        for p in model.parameters():
+            if p.requires_grad:
+                assert p.grad is not None
+                assert not torch.isnan(p.grad).any()
+

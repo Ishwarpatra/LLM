@@ -115,17 +115,23 @@ class Trainer:
             self.optimizer.zero_grad(set_to_none=True)
             accum_loss = 0.0
             
+            device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+            use_amp = (device_type == "cuda")
+            amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
+
             for micro_step in range(self.grad_accum_steps):
                 X, Y, mask, train_iter = self._get_batch(train_iter, self.train_dataloader)
                 
-                model_out = self.model(X)
-                logits = model_out[0] if isinstance(model_out, tuple) else model_out
-                if mask is not None:
-                    loss = self._masked_loss(logits, Y, mask)
-                else:
-                    loss = self.loss_fn(logits.view(-1, logits.size(-1)), Y.view(-1))
-                    
-                loss = loss / self.grad_accum_steps
+                with torch.amp.autocast(device_type=device_type, enabled=use_amp, dtype=amp_dtype):
+                    model_out = self.model(X)
+                    logits = model_out[0] if isinstance(model_out, tuple) else model_out
+                    if mask is not None:
+                        loss = self._masked_loss(logits, Y, mask)
+                    else:
+                        loss = self.loss_fn(logits.view(-1, logits.size(-1)), Y.view(-1))
+                        
+                    loss = loss / self.grad_accum_steps
+
                 loss.backward()
                 accum_loss += loss.item()
                 

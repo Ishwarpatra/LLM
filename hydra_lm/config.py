@@ -28,6 +28,7 @@ class HydraConfig:
     # Vocab / norm
     vocab_size: int = 256
     rms_eps: float = 1e-6
+    gradient_checkpointing: bool = False
 
     @property
     def head_dim(self) -> int:
@@ -87,6 +88,7 @@ class HydraConfig:
             layer_pattern=pattern,
             vocab_size=vocab_size,
             rms_eps=1e-6,
+            gradient_checkpointing=True,
         )
 
     @classmethod
@@ -107,4 +109,5 @@ class HydraConfig:
             layer_pattern=pattern,
             vocab_size=32000,
             rms_eps=1e-6,
+            gradient_checkpointing=True,
         )

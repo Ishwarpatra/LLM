@@ -141,29 +141,48 @@ class HydraLMTrainingAgent:
         x = x.to(self.device)
         y = y.to(self.device)
 
-        model_out = self.model(x)
-        logits = model_out[0] if isinstance(model_out, tuple) else model_out
+        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+        use_amp = (device_type == "cuda")
+        amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
 
-        if mask is not None:
-            mask = mask.to(self.device)
-            B, T, C = logits.shape
-            flat_logits = logits.view(-1, C)
-            flat_targets = y.view(-1).clone()
-            flat_targets[mask.view(-1) == 0] = -1
-            loss = self._loss_fn(flat_logits, flat_targets)
+        with torch.amp.autocast(device_type=device_type, enabled=use_amp, dtype=amp_dtype):
+            model_out = self.model(x)
+            logits = model_out[0] if isinstance(model_out, tuple) else model_out
+
+            if mask is not None:
+                mask = mask.to(self.device)
+                B, T, C = logits.shape
+                flat_logits = logits.view(-1, C)
+                flat_targets = y.view(-1).clone()
+                flat_targets[mask.view(-1) == 0] = -1
+                loss = self._loss_fn(flat_logits, flat_targets)
+            else:
+                loss = self._loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+
+            scaled_loss = loss / grad_accum_steps
+
+        if use_amp and amp_dtype == torch.float16:
+            if not hasattr(self, "scaler"):
+                self.scaler = torch.amp.GradScaler(device=device_type)
+            self.scaler.scale(scaled_loss).backward()
+            if not is_accum_step:
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                self.step += 1
         else:
-            loss = self._loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
-
-        scaled_loss = loss / grad_accum_steps
-        scaled_loss.backward()
-
-        if not is_accum_step:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.optimizer.step()
-            if self.scheduler is not None:
-                self.scheduler.step()
-            self.optimizer.zero_grad(set_to_none=True)
-            self.step += 1
+            scaled_loss.backward()
+            if not is_accum_step:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.optimizer.step()
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                self.step += 1
 
         return loss.item()
 
