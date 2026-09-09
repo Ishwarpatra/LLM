@@ -20,8 +20,11 @@ import time
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple, Union
 
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

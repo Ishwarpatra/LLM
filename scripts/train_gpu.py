@@ -46,9 +46,10 @@ def parse_args():
                    help="Number of gradient accumulation micro-steps (default: 1)")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--eval_interval", type=int, default=100)
-    default_data = "data/corpus.h5" if Path("data/corpus.h5").exists() else ("data/wikitext103.h5" if Path("data/wikitext103.h5").exists() else "data/tinyshakespeare.h5")
+    default_candidates = ["data/gutenberg.h5", "data/corpus.h5", "data/wikitext103.h5", "data/tinyshakespeare.h5"]
+    default_data = next((c for c in default_candidates if Path(c).exists()), "data/tinyshakespeare.h5")
     p.add_argument("--data_path", default=default_data,
-                   help="Path to pretraining HDF5 dataset (default: data/corpus.h5 or data/wikitext103.h5)")
+                   help="Path to pretraining HDF5 dataset (default: data/gutenberg.h5 or data/corpus.h5 or data/wikitext103.h5)")
     p.add_argument("--tokenizer", default="tokenizers/hydra_bpe" if Path("tokenizers/hydra_bpe").exists() else "gpt2",
                    help="Path to HF tokenizer dir/file or tiktoken encoding name")
     p.add_argument("--prompt", default="The history of science",
@@ -73,18 +74,18 @@ def parse_args():
 def _build_model_and_data(args):
     h5_path = Path(args.data_path)
     if not h5_path.exists():
-        alt_path = Path("data/corpus.h5") if h5_path.name == "wikitext103.h5" else Path("data/wikitext103.h5")
-        if alt_path.exists():
-            print(f"Note: '{h5_path}' not found, using '{alt_path}'")
-            h5_path = alt_path
+        fallback_paths = [Path("data/gutenberg.h5"), Path("data/corpus.h5"), Path("data/wikitext103.h5"), Path("data/tinyshakespeare.h5")]
+        found_alt = next((p for p in fallback_paths if p.exists() and p != h5_path), None)
+        if found_alt:
+            print(f"Note: '{h5_path}' not found, using '{found_alt}'")
+            h5_path = found_alt
         else:
             print(f"\n[ERROR] Dataset file '{h5_path}' not found!")
-            print("To generate the pretraining dataset, run:")
+            print("To generate a pretraining dataset, run:")
+            print("    !python scripts/prepare_gutenberg.py --download --out data/raw/corpus.txt --train_tokenizer --to_h5 data/gutenberg.h5")
+            print("Or:")
             print("    !python scripts/download_wikitext103.py --out data/raw/corpus.txt")
             print("    !python scripts/prepare_data.py --corpus data/raw/corpus.txt --tokenizer tokenizers/hydra_bpe --out data/corpus.h5\n")
-            print("Or for an instant 5-second smoke test using TinyShakespeare with hydra_bpe:")
-            print("    !python scripts/prepare_data.py --corpus data/tinyshakespeare.txt --tokenizer tokenizers/hydra_bpe --out data/tinyshakespeare_bpe.h5")
-            print("    !python scripts/train_gpu.py --data_path data/tinyshakespeare_bpe.h5 ...\n")
             sys.exit(1)
 
     from scripts.prepare_data import load_tokenizer
