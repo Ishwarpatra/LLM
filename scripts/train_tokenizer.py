@@ -24,8 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train a BPE tokenizer for HYDRA-LM")
-    p.add_argument("--corpus", required=True, help="Path to raw text file")
-    p.add_argument("--vocab_size", type=int, default=12000, help="Target vocabulary size")
+    default_corpus = "data/raw/corpus.txt" if Path("data/raw/corpus.txt").exists() else ("data/raw/wikitext103.txt" if Path("data/raw/wikitext103.txt").exists() else "data/raw/corpus.txt")
+    p.add_argument("--corpus", default=default_corpus, help="Path to raw text file (default: data/raw/corpus.txt or data/raw/wikitext103.txt)")
+    p.add_argument("--vocab_size", type=int, default=12000, help="Target vocabulary size (default: 12000)")
     p.add_argument("--min_frequency", type=int, default=2, help="Minimum token frequency")
     p.add_argument("--out", "--out_dir", dest="out_dir", default="tokenizers/hydra_bpe",
                    help="Directory to save vocab + merges and tokenizer.json")
@@ -44,6 +45,8 @@ def main():
     corpus = Path(args.corpus)
     if not corpus.exists():
         print(f"ERROR: corpus file not found: {corpus}")
+        print("To download the real corpus, run:")
+        print("    python scripts/download_wikitext103.py --out data/raw/corpus.txt")
         sys.exit(1)
 
     out_dir = Path(args.out_dir)

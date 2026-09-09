@@ -109,11 +109,13 @@ def load_tokenizer(tokenizer_path_or_name: str) -> TokenizerAdapter:
 
 def parse_args():
     p = argparse.ArgumentParser(description="Prepare HDF5 dataset for HYDRA-LM pretraining")
-    p.add_argument("--corpus", default="data/raw/wikitext103.txt",
-                   help="Path to raw text corpus")
+    default_corpus = "data/raw/corpus.txt" if Path("data/raw/corpus.txt").exists() else "data/raw/wikitext103.txt"
+    p.add_argument("--corpus", default=default_corpus,
+                   help="Path to raw text corpus (default: data/raw/corpus.txt or data/raw/wikitext103.txt)")
     p.add_argument("--tokenizer", default="tokenizers/hydra_bpe",
                    help="Path to HF tokenizer dir/file or tiktoken encoding name")
-    p.add_argument("--out", default="data/wikitext103.h5",
+    default_out = "data/corpus.h5" if Path("data/raw/corpus.txt").exists() else "data/wikitext103.h5"
+    p.add_argument("--out", default=default_out,
                    help="Path to output HDF5 file")
     p.add_argument("--batch_lines", type=int, default=10000,
                    help="Batch size (in lines) for tokenization")
@@ -123,13 +125,16 @@ def parse_args():
 def main():
     args = parse_args()
     corpus_path = Path(args.corpus)
-    out_path = Path(args.out)
-
     if not corpus_path.exists():
-        print(f"ERROR: Corpus file not found: {corpus_path}")
-        print("Download WikiText-103 first with:")
-        print("  python scripts/download_wikitext103.py --out data/raw/wikitext103.txt")
-        sys.exit(1)
+        alt_corpus = Path("data/raw/corpus.txt") if corpus_path.name == "wikitext103.txt" else Path("data/raw/wikitext103.txt")
+        if alt_corpus.exists():
+            print(f"Note: '{corpus_path}' not found, using '{alt_corpus}'")
+            corpus_path = alt_corpus
+        else:
+            print(f"ERROR: Corpus file not found: {corpus_path}")
+            print("Download the corpus first with:")
+            print("  python scripts/download_wikitext103.py --out data/raw/corpus.txt")
+            sys.exit(1)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
