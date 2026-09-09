@@ -77,14 +77,14 @@ class GatedDeltaNet(nn.Module):
             v_t = v[:, t]
             q_t = q[:, t]
 
-            pred  = torch.einsum("bkd,bk->bd", state, k_t)   # S_{t-1} k_t
+            pred  = torch.bmm(k_t.unsqueeze(1), state).squeeze(1)   # S_{t-1} k_t
             error = v_t - pred
 
             a = alpha[:, t].view(B, 1, 1)
             beta_k = beta[:, t].unsqueeze(-1) * k_t           # (B, D) scaled key
-            state = a * state + torch.einsum("bk,bd->bkd", beta_k, error)
+            state = a * state + torch.bmm(beta_k.unsqueeze(2), error.unsqueeze(1))
 
-            y_t = torch.einsum("bkd,bk->bd", state, q_t)     # read-out
+            y_t = torch.bmm(q_t.unsqueeze(1), state).squeeze(1)     # read-out
             outputs.append(y_t)
 
         y = torch.stack(outputs, dim=1)   # (B, T, D)

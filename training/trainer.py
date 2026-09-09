@@ -103,7 +103,7 @@ class Trainer:
         for step in range(self.max_iters):
             if step % self.eval_interval == 0 or step == self.max_iters - 1:
                 losses = self.estimate_loss()
-                print(f"step {step}: train loss {losses.get('train', 0):.4f}, val loss {losses.get('val', 0):.4f}")
+                print(f"step {step}: train loss {losses.get('train', 0):.4f}, val loss {losses.get('val', 0):.4f}", flush=True)
                 
                 if 'val' in losses and losses['val'] < best_val_loss:
                     best_val_loss = losses['val']
@@ -145,7 +145,7 @@ class Trainer:
                 dt = t1 - t0
                 t0 = t1
                 lr = self.optimizer.param_groups[0]['lr']
-                print(f"iter {step} | loss {accum_loss:.4f} | lr {lr:e} | time {dt*1000:.2f}ms")
+                print(f"iter {step} | loss {accum_loss:.4f} | lr {lr:e} | time {dt*1000:.2f}ms", flush=True)
                 
     def save_checkpoint(self, step: int, is_best: bool = False):
         checkpoint = {

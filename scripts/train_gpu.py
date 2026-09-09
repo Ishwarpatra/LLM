@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 import io
+import time
 import argparse
 from pathlib import Path
 
@@ -46,6 +47,8 @@ def parse_args():
                    help="Number of gradient accumulation micro-steps (default: 1)")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--eval_interval", type=int, default=100)
+    p.add_argument("--log_interval", type=int, default=10,
+                   help="Steps between progress prints (default: 10)")
     default_candidates = ["data/gutenberg.h5", "data/corpus.h5", "data/wikitext103.h5", "data/tinyshakespeare.h5"]
     default_data = next((c for c in default_candidates if Path(c).exists()), "data/tinyshakespeare.h5")
     p.add_argument("--data_path", default=default_data,
@@ -203,12 +206,12 @@ def run_deterministic(args, config, enc, model, train_loader, val_loader, device
             "grad_accum_steps": args.grad_accum,
             "eval_interval": args.eval_interval,
             "eval_iters": 20,
-            "log_interval": max(1, args.eval_interval // 4),
+            "log_interval": args.log_interval,
             "save_interval": args.eval_interval * 2,
             "out_dir": args.out_dir,
         },
     )
-    print(f"\n[no-agent] Starting deterministic loop ({args.max_iters} steps) …\n")
+    print(f"\n[no-agent] Starting deterministic loop ({args.max_iters} steps) …\n", flush=True)
     trainer.train()
 
 
@@ -233,7 +236,8 @@ def run_agent(args, config, enc, model, train_loader, val_loader, device):
 
     data_iter = iter(train_loader)
 
-    print(f"\n[agent] Starting agent-aware loop ({args.max_iters} steps) …\n")
+    print(f"\n[agent] Starting agent-aware loop ({args.max_iters} steps) …\n", flush=True)
+    t0 = time.time()
     for step in range(args.max_iters):
         accum_loss = 0.0
         for micro_step in range(args.grad_accum):
@@ -254,34 +258,38 @@ def run_agent(args, config, enc, model, train_loader, val_loader, device):
         step_loss = accum_loss / args.grad_accum
         agent.loss_history.append(step_loss)
 
-        if step % max(1, args.eval_interval // 4) == 0:
+        if step % args.log_interval == 0:
+            t1 = time.time()
+            dt_ms = (t1 - t0) * 1000.0 / max(1, args.log_interval) if step > 0 else (t1 - t0) * 1000.0
+            t0 = t1
             lr = optimizer.param_groups[0]["lr"]
-            print(f"iter {step} | loss {step_loss:.4f} | lr {lr:.2e}")
+            dt_str = f" | time {dt_ms:.1f}ms/iter" if step > 0 else ""
+            print(f"iter {step} | loss {step_loss:.4f} | lr {lr:.2e}{dt_str}", flush=True)
 
         if step > 0 and step % args.agent_interval == 0:
             window = agent.loss_history[-args.agent_interval:]
             verdict = agent.diagnose_training_health(window)
-            print(f"\n[agent verdict @ step {step}] {verdict.action}: {verdict.reason}")
+            print(f"\n[agent verdict @ step {step}] {verdict.action}: {verdict.reason}", flush=True)
 
             if verdict.action == "STOP_EARLY":
-                print("[agent] Stopping early.")
+                print("[agent] Stopping early.", flush=True)
                 break
             elif verdict.action == "ADJUST_LR" and verdict.new_lr is not None:
                 agent.set_lr(verdict.new_lr)
             elif verdict.action == "ROLLBACK" and verdict.checkpoint_tag:
-                print(f"[agent] Rolling back to '{verdict.checkpoint_tag}' …")
+                print(f"[agent] Rolling back to '{verdict.checkpoint_tag}' …", flush=True)
                 try:
                     agent.load_checkpoint(verdict.checkpoint_tag)
                 except FileNotFoundError:
-                    print("[agent] Checkpoint not found — continuing.")
+                    print("[agent] Checkpoint not found — continuing.", flush=True)
 
             plan = agent.choose_next_eval_target(step)
-            print(f"[agent eval plan @ step {step}] {plan.reason}")
+            print(f"[agent eval plan @ step {step}] {plan.reason}", flush=True)
             if plan.run_generation_sample:
                 sample = agent.generate_sample(
                     args.prompt, max_tokens=80
                 )
-                print(f"\n--- Sample @ step {step} ---\n{sample}\n{'-'*40}")
+                print(f"\n--- Sample @ step {step} ---\n{sample}\n{'-'*40}", flush=True)
 
             agent.save_checkpoint(tag=f"step_{step}")
 
