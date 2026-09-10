@@ -78,22 +78,36 @@ def parse_args():
     return p.parse_args()
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 def _build_model_and_data(args):
     h5_path = Path(args.data_path)
     if not h5_path.exists():
-        fallback_paths = [Path("data/gutenberg.h5"), Path("data/corpus.h5"), Path("data/wikitext103.h5"), Path("data/tinyshakespeare.h5")]
-        found_alt = next((p for p in fallback_paths if p.exists() and p != h5_path), None)
-        if found_alt:
-            print(f"Note: '{h5_path}' not found, using '{found_alt}'")
-            h5_path = found_alt
+        if (PROJECT_ROOT / args.data_path).exists():
+            h5_path = PROJECT_ROOT / args.data_path
         else:
-            print(f"\n[ERROR] Dataset file '{h5_path}' not found!")
-            print("To generate a pretraining dataset, run:")
-            print("    !python scripts/prepare_gutenberg.py --download --out data/raw/corpus.txt --train_tokenizer --to_h5 data/gutenberg.h5")
-            print("Or:")
-            print("    !python scripts/download_wikitext103.py --out data/raw/corpus.txt")
-            print("    !python scripts/prepare_data.py --corpus data/raw/corpus.txt --tokenizer tokenizers/hydra_bpe --out data/corpus.h5\n")
-            sys.exit(1)
+            candidates = [
+                Path("data/gutenberg.h5"), PROJECT_ROOT / "data/gutenberg.h5",
+                Path("data/corpus.h5"), PROJECT_ROOT / "data/corpus.h5",
+                Path("data/wikitext103.h5"), PROJECT_ROOT / "data/wikitext103.h5",
+                Path("data/tinyshakespeare.h5"), PROJECT_ROOT / "data/tinyshakespeare.h5",
+            ]
+            found_alt = next((p for p in candidates if p.exists() and p != h5_path), None)
+            if found_alt:
+                print(f"Note: '{h5_path}' not found, using '{found_alt}'")
+                h5_path = found_alt
+            else:
+                print(f"\n[ERROR] Dataset file '{h5_path}' not found!")
+                print("To generate a pretraining dataset, run:")
+                print("    !python scripts/prepare_gutenberg.py --download --out data/raw/corpus.txt --train_tokenizer --to_h5 data/gutenberg.h5")
+                print("Or:")
+                print("    !python scripts/download_wikitext103.py --out data/raw/corpus.txt")
+                print("    !python scripts/prepare_data.py --corpus data/raw/corpus.txt --tokenizer tokenizers/hydra_bpe --out data/corpus.h5\n")
+                sys.exit(1)
+
+    tok_path = Path(args.tokenizer)
+    if not tok_path.exists() and (PROJECT_ROOT / args.tokenizer).exists():
+        args.tokenizer = str(PROJECT_ROOT / args.tokenizer)
 
     from scripts.prepare_data import load_tokenizer
     try:
