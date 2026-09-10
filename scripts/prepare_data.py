@@ -27,7 +27,8 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
         pass
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
 
@@ -129,23 +130,35 @@ def main():
     args = parse_args()
     corpus_path = Path(args.corpus)
     if not corpus_path.exists():
-        alt_corpus = Path("data/raw/corpus.txt") if corpus_path.name == "wikitext103.txt" else Path("data/raw/wikitext103.txt")
-        if alt_corpus.exists():
-            print(f"Note: '{corpus_path}' not found, using '{alt_corpus}'")
-            corpus_path = alt_corpus
+        if (PROJECT_ROOT / args.corpus).exists():
+            corpus_path = PROJECT_ROOT / args.corpus
         else:
-            print(f"ERROR: Corpus file not found: {corpus_path}")
-            print("Download the corpus first with:")
-            print("  python scripts/download_wikitext103.py --out data/raw/corpus.txt")
-            sys.exit(1)
+            alt_corpus = Path("data/raw/corpus.txt") if corpus_path.name == "wikitext103.txt" else Path("data/raw/wikitext103.txt")
+            if alt_corpus.exists():
+                print(f"Note: '{corpus_path}' not found, using '{alt_corpus}'")
+                corpus_path = alt_corpus
+            elif (PROJECT_ROOT / alt_corpus).exists():
+                corpus_path = PROJECT_ROOT / alt_corpus
+            else:
+                print(f"ERROR: Corpus file not found: {corpus_path}")
+                print("Download the corpus first with:")
+                print("  python scripts/download_wikitext103.py --out data/raw/corpus.txt")
+                sys.exit(1)
 
+    out_path = Path(args.out)
+    if not out_path.is_absolute() and not out_path.parent.exists() and (PROJECT_ROOT / out_path.parent).exists():
+        out_path = PROJECT_ROOT / out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    tok_target = args.tokenizer
+    if not Path(tok_target).exists() and (PROJECT_ROOT / tok_target).exists():
+        tok_target = str(PROJECT_ROOT / tok_target)
+
     print(f"Corpus: {corpus_path} ({corpus_path.stat().st_size / 1e6:.1f} MB)")
-    print(f"Tokenizer: {args.tokenizer}")
+    print(f"Tokenizer: {tok_target}")
     print(f"Output: {out_path}")
 
-    tokenizer = load_tokenizer(args.tokenizer)
+    tokenizer = load_tokenizer(tok_target)
 
     t0 = time.time()
     total_tokens = 0
