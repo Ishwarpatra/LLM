@@ -51,7 +51,7 @@ def parse_args():
                    help="Steps between progress prints (default: 10)")
     default_candidates = ["data/gutenberg.h5", "data/corpus.h5", "data/wikitext103.h5", "data/tinyshakespeare.h5"]
     default_data = next((c for c in default_candidates if Path(c).exists()), "data/tinyshakespeare.h5")
-    p.add_argument("--data_path", default=default_data,
+    p.add_argument("--data_path", "--dataset", dest="data_path", default=default_data,
                    help="Path to pretraining HDF5 dataset (default: data/gutenberg.h5 or data/corpus.h5 or data/wikitext103.h5)")
     p.add_argument("--tokenizer", default="tokenizers/hydra_bpe" if Path("tokenizers/hydra_bpe").exists() else "gpt2",
                    help="Path to HF tokenizer dir/file or tiktoken encoding name")
@@ -63,6 +63,12 @@ def parse_args():
     p.add_argument("--no_gradient_checkpointing", action="store_true",
                    help="Explicitly disable activation gradient checkpointing")
     # Agent flags
+    p.add_argument(
+        "--agent",
+        dest="no_agent",
+        action="store_false",
+        help="Enable agentic decisions (default: enabled).",
+    )
     p.add_argument(
         "--no-agent",
         dest="no_agent",
