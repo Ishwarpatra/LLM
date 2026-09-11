@@ -154,6 +154,12 @@ def main():
     if not Path(tok_target).exists() and (PROJECT_ROOT / tok_target).exists():
         tok_target = str(PROJECT_ROOT / tok_target)
 
+    if corpus_path.stat().st_size == 0:
+        print(f"\n[ERROR] Corpus file '{corpus_path}' is empty (0 bytes)!")
+        print("Please download/extract the corpus first:")
+        print(f"  python scripts/download_wikitext103.py --out {corpus_path}\n")
+        sys.exit(1)
+
     print(f"Corpus: {corpus_path} ({corpus_path.stat().st_size / 1e6:.1f} MB)")
     print(f"Tokenizer: {tok_target}")
     print(f"Output: {out_path}")
