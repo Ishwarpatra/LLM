@@ -67,12 +67,14 @@ def parse_args():
         "--agent",
         dest="no_agent",
         action="store_false",
+        default=False,
         help="Enable agentic decisions (default: enabled).",
     )
     p.add_argument(
         "--no-agent",
         dest="no_agent",
         action="store_true",
+        default=False,
         help="Disable agentic decisions; run the deterministic loop (CI/test safe).",
     )
     p.add_argument(
@@ -126,7 +128,14 @@ def _build_model_and_data(args):
     print(f"Loaded tokenizer '{args.tokenizer}' (vocab_size={vocab_size:,})")
 
     dataset = PretrainDataset(str(h5_path), seq_len=args.seq_len, stride=args.seq_len // 2)
-    print(f"Loaded PretrainDataset with {len(dataset):,} samples (seq_len={args.seq_len})")
+    print(f"Loaded PretrainDataset from '{h5_path}' with {len(dataset):,} samples (tokens={dataset.n_tokens:,}, seq_len={args.seq_len})")
+
+    if len(dataset) == 0:
+        print(f"\n[ERROR] Dataset '{h5_path}' contains 0 usable samples (total tokens: {dataset.n_tokens:,})!")
+        print(f"The dataset file appears to be empty or was interrupted during preparation.")
+        print(f"Please recreate it by running:")
+        print(f"    !python scripts/prepare_data.py --corpus data/raw/wikitext103.txt --tokenizer tokenizers/hydra_bpe --out {h5_path}\n")
+        sys.exit(1)
 
     # Sanity check: ensure token IDs in dataset do not exceed model vocab_size
     sample_ids, _ = dataset[0]
