@@ -90,6 +90,27 @@ def parse_args():
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+
+class ParallelHydraLM(torch.nn.Module):
+    """Wrapper that ensures DataParallel gathers only logits during multi-GPU training."""
+    def __init__(self, model: HydraLM):
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_ids):
+        out = self.model(input_ids)
+        return out[0] if isinstance(out, tuple) else out
+
+
+def _unwrap_model(m):
+    """Unwrap DataParallel / ParallelHydraLM to access raw HydraLM."""
+    if hasattr(m, "module"):
+        m = m.module
+    if hasattr(m, "model"):
+        m = m.model
+    return m
+
+
 def _build_model_and_data(args):
     h5_path = Path(args.data_path)
     if not h5_path.exists():
@@ -200,15 +221,21 @@ def _build_model_and_data(args):
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Initialized HydraLM model with {num_params:,} parameters on {device}")
 
+    num_gpus = torch.cuda.device_count() if device_str == "cuda" else 0
+    if num_gpus > 1:
+        print(f"\n⚡ Detected {num_gpus} CUDA GPUs! Enabling torch.nn.DataParallel across all GPUs (GPU 0 & GPU 1).")
+        model = torch.nn.DataParallel(ParallelHydraLM(model))
+
     return config, enc, model, train_loader, val_loader, device
 
 
 def _initial_sample(model, enc, device, prompt_text: str = "The history of science"):
+    raw_model = _unwrap_model(model)
     encoded = enc.encode(prompt_text)
     prompt_ids = torch.tensor([encoded], dtype=torch.long, device=device)
-    model.eval()
+    raw_model.eval()
     with torch.no_grad():
-        ids = model.generate(
+        ids = raw_model.generate(
             prompt_ids, max_new_tokens=40,
             temperature=1.0, top_k=50, repetition_penalty=1.5,
         )
@@ -219,9 +246,10 @@ def _initial_sample(model, enc, device, prompt_text: str = "The history of scien
 
 
 def _final_sample(model, enc, prompt_ids):
-    model.eval()
+    raw_model = _unwrap_model(model)
+    raw_model.eval()
     with torch.no_grad():
-        ids = model.generate(
+        ids = raw_model.generate(
             prompt_ids, max_new_tokens=200,
             temperature=0.9, top_p=0.92, repetition_penalty=1.4,
             recent_window=20,

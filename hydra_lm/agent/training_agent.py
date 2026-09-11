@@ -186,6 +186,16 @@ class HydraLMTrainingAgent:
 
         return loss.item()
 
+    @property
+    def raw_model(self) -> HydraLM:
+        """Unwrap DataParallel / ParallelHydraLM to access underlying HydraLM directly."""
+        m = self.model
+        if hasattr(m, "module"):
+            m = m.module
+        if hasattr(m, "model"):
+            m = m.model
+        return m
+
     def save_checkpoint(self, tag: str) -> str:
         """Persist model + optimizer state; return the checkpoint path.
 
@@ -197,7 +207,7 @@ class HydraLMTrainingAgent:
         path = self.checkpoint_dir / f"ckpt_{tag}.pt"
         torch.save(
             {
-                "model": self.model.state_dict(),
+                "model": self.raw_model.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
                 "step": self.step,
                 "config": self.config,
@@ -217,7 +227,7 @@ class HydraLMTrainingAgent:
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
-        self.model.load_state_dict(ckpt["model"])
+        self.raw_model.load_state_dict(ckpt["model"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.step = ckpt.get("step", 0)
         self.loss_history = ckpt.get("loss_history", [])
@@ -245,9 +255,9 @@ class HydraLMTrainingAgent:
         raw_enc = tok.encode(prompt)
         prompt_ids = raw_enc.ids if hasattr(raw_enc, "ids") else list(raw_enc)
         ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
-        self.model.eval()
+        self.raw_model.eval()
         with torch.no_grad():
-            out = self.model.generate(
+            out = self.raw_model.generate(
                 ids,
                 max_new_tokens=max_tokens,
                 temperature=0.9,
@@ -368,7 +378,7 @@ class HydraLMTrainingAgent:
         depths: List[float] = []
         filler_token = 0  # padding token as neutral filler
 
-        self.model.eval()
+        self.raw_model.eval()
         with torch.no_grad():
             for i, position in enumerate(
                 range(0, context_len, max(1, context_len // n_positions))
@@ -379,7 +389,7 @@ class HydraLMTrainingAgent:
                 end = min(position + len(needle_ids), context_len)
                 ctx[position:end] = needle_ids[: end - position]
                 ids = torch.tensor([ctx], dtype=torch.long, device=self.device)
-                out = self.model.generate(ids, max_new_tokens=len(needle_ids) + 5)
+                out = self.raw_model.generate(ids, max_new_tokens=len(needle_ids) + 5)
                 generated = out[0, len(ctx):].tolist()
                 found = all(t in generated for t in needle_ids)
                 if found:
