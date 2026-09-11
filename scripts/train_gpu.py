@@ -62,6 +62,8 @@ def parse_args():
                    help="Enable activation gradient checkpointing (default: enabled for medium/reference)")
     p.add_argument("--no_gradient_checkpointing", action="store_true",
                    help="Explicitly disable activation gradient checkpointing")
+    p.add_argument("--num_workers", type=int, default=2,
+                   help="Number of DataLoader workers for asynchronous prefetching (default: 2)")
     # Agent flags
     p.add_argument(
         "--agent",
@@ -170,13 +172,28 @@ def _build_model_and_data(args):
     val_size = len(dataset) - train_size
     train_ds, val_ds = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
-
     device_str = args.device
     if device_str == "cuda" and not torch.cuda.is_available():
         print("[WARNING] CUDA not available — falling back to CPU.")
         device_str = "cpu"
+
+    is_cuda = ("cuda" in device_str and torch.cuda.is_available())
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=is_cuda,
+        persistent_workers=(args.num_workers > 0),
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=is_cuda,
+        persistent_workers=(args.num_workers > 0),
+    )
 
     device = torch.device(device_str)
     model = HydraLM(config).to(device)
